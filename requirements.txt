@@ -1,0 +1,5 @@
+python-telegram-bot
+flask-sqlalchemy
+psycopg2-binary
+flask
+flask-migrate
