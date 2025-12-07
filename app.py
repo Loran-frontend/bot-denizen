@@ -1,12 +1,11 @@
-from flask import Flask, render_template, request
+from flask import Flask, request
 from flask_sqlalchemy import SQLAlchemy
 from config import Config
 from telegram import Update
 from telegram.ext import ApplicationBuilder, MessageHandler, filters, ContextTypes
-from threading import Thread
 from flask_migrate import Migrate
 
-TOKEN = ""
+TOKEN = "8394612560:AAEA_-8I-TMpW7LxCEmGHBu8uWa6FMoHcJk"
 
 app = Flask(__name__)
 app.config.from_object(Config)
@@ -25,36 +24,61 @@ class User(db.Model):
 active_codes = {}
 used_codes = {}
 
+@app.route('/add_code', methods=['POST'])
+def add_code():
+    data = request.json
+    code = data.get("code")
+    if code:
+        active_codes[code] = True
+        print(f"[INFO] Добавлен код: {code}")
+        return "OK"
+    return "ERROR", 400
 
-# @app.route('/add_code', methods=['POST'])
-# def add_code():
-#     data = request.json
-#     code = data.get("code")
-#     if code:
-#         active_codes[code] = True
-#         print(f"[INFO] Добавлен код: {code}")
-#         return "OK"
-#     return "ERROR", 400
+@app.route('/check_code', methods=['GET'])
+def check_code():
+    code = request.args.get("code")
+    uuid = request.args.get("uuid")
+    name = request.args.get("name")
+    if code in used_codes:
+        telegram_id = used_codes.pop(code)
+        active_codes.pop(code, None)
+        new_user = User(username=name, uuid=uuid, id_telegram=telegram_id)
+        db.session.add(new_user)
+        db.session.commit()
+        return str(telegram_id)
+    return "NONE"
 
-# @app.route('/check_code', methods=['GET'])
-# def check_code():
-#     code = request.args.get("code")
-#     if code in used_codes:
-#         telegram_id = used_codes.pop(code)
-#         active_codes.pop(code, None)
-#         return str(telegram_id)
-#     return "NONE"
+@app.route('/remove_code', methods=['POST'])
+def remove_code():
+    data = request.json
+    code = data.get("code")
+    if code:
+        active_codes.pop(code, None)
+        used_codes.pop(code, None)
+        print(f"[INFO] Код {code} удалён")
+        return "OK"
+    return "ERROR", 400
 
-# @app.route('/remove_code', methods=['POST'])
-# def remove_code():
-#     data = request.json
-#     code = data.get("code")
-#     if code:
-#         active_codes.pop(code, None)
-#         used_codes.pop(code, None)
-#         print(f"[INFO] Код {code} удалён")
-#         return "OK"
-#     return "ERROR", 400
+async def handle_update(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not update.message or not update.message.text:
+        return
+    text = update.message.text.strip()
+    telegram_id = update.message.from_user.id
+
+    if text in active_codes:
+        used_codes[text] = telegram_id
+        await update.message.reply_text("Ваш профиль майнкрафт успешно привязан")
+        print(f"[INFO] Код {text} использован пользователем {telegram_id}")
+    else:
+        await update.message.reply_text("Код не найден или уже использован")
 
 if __name__ == "__main__":
+    appTG = ApplicationBuilder().token(TOKEN).build()
+
+    appTG.add_handler(MessageHandler(filters.TEXT, handle_update))
+    appTG.run_polling()
+    print("бот запущен")
     app.run(debug=True)
+
+
+# gunicorn -w 4 -b :5000 app:app
