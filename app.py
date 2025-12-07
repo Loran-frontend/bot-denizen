@@ -1,11 +1,8 @@
+# app.py
 from flask import Flask, request
 from flask_sqlalchemy import SQLAlchemy
 from config import Config
-from telegram import Update
-from telegram.ext import ApplicationBuilder, MessageHandler, filters, ContextTypes
 from flask_migrate import Migrate
-
-TOKEN = "8394612560:AAEA_-8I-TMpW7LxCEmGHBu8uWa6FMoHcJk"
 
 app = Flask(__name__)
 app.config.from_object(Config)
@@ -19,117 +16,88 @@ class User(db.Model):
     id_telegram = db.Column(db.String(120), unique=True, nullable=False)
 
     def __repr__(self):
-        return f''
+        return f'<User {self.username}>'
 
-active_codes = {}
-used_codes = {}
+# Для хранения кодов можно использовать базу данных
+# или оставить в памяти если это временно
+from datetime import datetime
+
+class AuthCode(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    code = db.Column(db.String(50), unique=True, nullable=False)
+    is_active = db.Column(db.Boolean, default=True)
+    telegram_id = db.Column(db.String(120), nullable=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    used_at = db.Column(db.DateTime, nullable=True)
 
 @app.route('/')
-def index():
-    return {
-        "status": "running",
-        "service": "Minecraft-Telegram Auth",
-        "endpoints": {
-            "check_code": "/check_code?code=XXX&uuid=XXX&name=XXX",
-            "add_code": "/add_code (POST)",
-            "remove_code": "/remove_code (POST)"
-        }
-    }
-
-@app.route('/health')
-def health_check():
-    try:
-        # Проверяем подключение к БД
-        db.session.execute('SELECT 1')
-        return {"database": "connected", "status": "healthy"}
-    except Exception as e:
-        return {"database": "error", "status": "unhealthy", "error": str(e)}, 500
+def home():
+    return """
+    <h1>Minecraft-Telegram Auth Service</h1>
+    <p>API работает ✅</p>
+    """
 
 @app.route('/add_code', methods=['POST'])
 def add_code():
     data = request.json
     code = data.get("code")
-    if code:
-        active_codes[code] = True
-        print(f"[INFO] Добавлен код: {code}")
-        return "OK"
-    return "ERROR", 400
+    
+    if not code:
+        return {"error": "Code is required"}, 400
+    
+    # Проверяем, существует ли уже код
+    existing = AuthCode.query.filter_by(code=code).first()
+    if existing:
+        existing.is_active = True
+        existing.telegram_id = None
+        existing.used_at = None
+    else:
+        new_code = AuthCode(code=code, is_active=True)
+        db.session.add(new_code)
+    
+    db.session.commit()
+    
+    print(f"[INFO] Добавлен код: {code}")
+    return {"status": "OK", "code": code}
 
 @app.route('/check_code', methods=['GET'])
 def check_code():
     code = request.args.get("code")
     uuid = request.args.get("uuid")
     name = request.args.get("name")
-    if code in used_codes:
-        telegram_id = used_codes.pop(code)
-        active_codes.pop(code, None)
+    
+    if not all([code, uuid, name]):
+        return {"error": "Missing parameters"}, 400
+    
+    auth_code = AuthCode.query.filter_by(code=code, is_active=True).first()
+    
+    if auth_code and auth_code.telegram_id:
+        # Код использован
+        telegram_id = auth_code.telegram_id
+        auth_code.is_active = False
+        auth_code.used_at = datetime.utcnow()
+        
+        # Создаем пользователя
         new_user = User(username=name, uuid=uuid, id_telegram=telegram_id)
         db.session.add(new_user)
         db.session.commit()
-        return str(telegram_id)
-    return "NONE"
+        
+        return {"status": "used", "telegram_id": telegram_id}
+    
+    return {"status": "not_found"}
 
 @app.route('/remove_code', methods=['POST'])
 def remove_code():
     data = request.json
     code = data.get("code")
-    if code:
-        active_codes.pop(code, None)
-        used_codes.pop(code, None)
-        print(f"[INFO] Код {code} удалён")
-        return "OK"
-    return "ERROR", 400
-
-async def handle_update(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not update.message or not update.message.text:
-        return
-    text = update.message.text.strip()
-    telegram_id = update.message.from_user.id
-
-    if text in active_codes:
-        used_codes[text] = telegram_id
-        await update.message.reply_text("Ваш профиль майнкрафт успешно привязан")
-        print(f"[INFO] Код {text} использован пользователем {telegram_id}")
-    else:
-        await update.message.reply_text("Код не найден или уже использован")
-
-def run_telegram_bot():
-    """Запуск Telegram бота в отдельном процессе"""
-    appTG = ApplicationBuilder().token(TOKEN).build()
-    appTG.add_handler(MessageHandler(filters.TEXT, handle_update))
     
-    print("🚀 Telegram бот запускается...")
+    if not code:
+        return {"error": "Code is required"}, 400
     
-    # Настройка обработки ошибок
-    async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-        print(f"❌ Ошибка в боте: {context.error}")
+    auth_code = AuthCode.query.filter_by(code=code).first()
+    if auth_code:
+        db.session.delete(auth_code)
+        db.session.commit()
     
-    appTG.add_error_handler(error_handler)
-    
-    # Запуск бота
-    appTG.run_polling(
-        drop_pending_updates=True,
-        allowed_updates=Update.ALL_TYPES
-    )
-
-if __name__ == "__main__":
-    # В локальной разработке запускаем и Flask и бота
-    import threading
-    
-    # Запускаем Telegram бот в отдельном потоке
-    bot_thread = threading.Thread(target=run_telegram_bot, daemon=True)
-    bot_thread.start()
-    
-    print("🤖 Telegram бот запущен в отдельном потоке")
-    print("🌐 Flask API запускается...")
-    
-    # Запускаем Flask
-    app.run(debug=False, host='0.0.0.0', port=5000)
-else:
-    # В продакшене (Railway) запускаем только бота
-    # Flask будет запущен через gunicorn
-    import threading
-    
-    bot_thread = threading.Thread(target=run_telegram_bot, daemon=True)
-    bot_thread.start()
-    print("🤖 Telegram бот запущен на Railway")
+    print(f"[INFO] Код {code} удалён")
+    return {"status": "OK"}
