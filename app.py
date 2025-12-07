@@ -24,6 +24,27 @@ class User(db.Model):
 active_codes = {}
 used_codes = {}
 
+@app.route('/')
+def index():
+    return {
+        "status": "running",
+        "service": "Minecraft-Telegram Auth",
+        "endpoints": {
+            "check_code": "/check_code?code=XXX&uuid=XXX&name=XXX",
+            "add_code": "/add_code (POST)",
+            "remove_code": "/remove_code (POST)"
+        }
+    }
+
+@app.route('/health')
+def health_check():
+    try:
+        # Проверяем подключение к БД
+        db.session.execute('SELECT 1')
+        return {"database": "connected", "status": "healthy"}
+    except Exception as e:
+        return {"database": "error", "status": "unhealthy", "error": str(e)}, 500
+
 @app.route('/add_code', methods=['POST'])
 def add_code():
     data = request.json
@@ -74,11 +95,14 @@ async def handle_update(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 if __name__ == "__main__":
     appTG = ApplicationBuilder().token(TOKEN).build()
-
     appTG.add_handler(MessageHandler(filters.TEXT, handle_update))
-    appTG.run_polling()
-    print("бот запущен")
-    app.run(debug=True)
+    
+    import threading
+    bot_thread = threading.Thread(target=appTG.run_polling)
+    bot_thread.start()
+    
+    print("Telegram бот запущен в отдельном потоке")
+    app.run(debug=False, host='0.0.0.0', port=5000)
 
 
 # gunicorn -w 4 -b :5000 app:app
