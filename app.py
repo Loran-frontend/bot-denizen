@@ -93,16 +93,43 @@ async def handle_update(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         await update.message.reply_text("Код не найден или уже использован")
 
-if __name__ == "__main__":
+def run_telegram_bot():
+    """Запуск Telegram бота в отдельном процессе"""
     appTG = ApplicationBuilder().token(TOKEN).build()
     appTG.add_handler(MessageHandler(filters.TEXT, handle_update))
     
+    print("🚀 Telegram бот запускается...")
+    
+    # Настройка обработки ошибок
+    async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        print(f"❌ Ошибка в боте: {context.error}")
+    
+    appTG.add_error_handler(error_handler)
+    
+    # Запуск бота
+    appTG.run_polling(
+        drop_pending_updates=True,
+        allowed_updates=Update.ALL_TYPES
+    )
+
+if __name__ == "__main__":
+    # В локальной разработке запускаем и Flask и бота
     import threading
-    bot_thread = threading.Thread(target=appTG.run_polling)
+    
+    # Запускаем Telegram бот в отдельном потоке
+    bot_thread = threading.Thread(target=run_telegram_bot, daemon=True)
     bot_thread.start()
     
-    print("Telegram бот запущен в отдельном потоке")
+    print("🤖 Telegram бот запущен в отдельном потоке")
+    print("🌐 Flask API запускается...")
+    
+    # Запускаем Flask
     app.run(debug=False, host='0.0.0.0', port=5000)
-
-
-# gunicorn -w 4 -b :5000 app:app
+else:
+    # В продакшене (Railway) запускаем только бота
+    # Flask будет запущен через gunicorn
+    import threading
+    
+    bot_thread = threading.Thread(target=run_telegram_bot, daemon=True)
+    bot_thread.start()
+    print("🤖 Telegram бот запущен на Railway")
